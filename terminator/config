@@ -1,0 +1,30 @@
+[global_config]
+  window_state = maximise
+  borderless = True
+[keybindings]
+  go_up = <Primary><Shift>Up
+  go_down = <Primary><Shift>Down
+  go_left = <Primary><Shift>Left
+  go_right = <Primary><Shift>Right
+  split_horiz = <Shift>o
+  split_vert = <Shift>e
+[profiles]
+  [[default]]
+    background_darkness = 0.75
+    background_type = transparent
+    cursor_shape = ibeam
+    cursor_color = "#aaaaaa"
+    foreground_color = "#00ff00"
+    show_titlebar = False
+    scrollbar_position = hidden
+    scrollback_infinite = True
+    palette = "#000000:#cc0000:#4e9a06:#c4a000:#3465a4:#75507b:#06989a:#d3d7cf:#555753:#ef2929:#8ae234:#fce94f:#729fcf:#ad7fa8:#34e2e2:#eeeeec"
+[layouts]
+  [[default]]
+    [[[window0]]]
+      type = Window
+      parent = ""
+    [[[child1]]]
+      type = Terminal
+      parent = window0
+[plugins]
