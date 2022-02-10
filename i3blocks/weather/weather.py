@@ -1,123 +1,109 @@
-#!/usr/bin/python3
-''' Weather acquirer for: https://github.com/miklhh/i3blocks-config '''
-import os
-import datetime
-import xml.etree.ElementTree as ET
+#!/usr/bin/env python
 import requests
+from collections import namedtuple
+from datetime import datetime
+from optparse import OptionParser
+from codes import CODE_TO_ICON
 
-# Forecast URL.
-YR_URL = "https://www.yr.no/place/Sverige/%C3%96sterg%C3%B6tland/Link%C3%B6ping/forecast.xml"
+class WttrApi:
+    def __init__(self, city, unit_degree):
+        self.city = city
+        self.info = self._get_current_info(city)
+        self.unit_degree = unit_degree
+        
 
-# Good to have data + funky emojicons.
-FORECAST_CACHE_FILE = os.path.dirname(os.path.realpath(__file__)) + "/forecast.xml"
+    def _get_current_info(self, city):
+        ''' Get current information which contains current_condition and astronomy
+            (sunrise and sunset time)'''
+   
+        Info = namedtuple('Info', 'condition astronomy')    
+        r = requests.get(f'http://wttr.in/{city}?format=j1').json()    
+        condition = r['current_condition'][0]
+        astronomy = r['weather'][0]['astronomy'][0]
+        return Info(condition, astronomy)
 
-# Emojis associatted with weather        # Day  # Night
-WEATHER_TYPES = { "Fair"               : ["☀️",   "🌙"], #pylint: disable=C0326
-                  "Partly cloudy"      : ["⛅",  "☁️"],  #pylint: disable=C0326
-                  "Clear sky"          : ["☀️",   "🌙"], #pylint: disable=C0326
-                  "Cloudy"             : ["☁️",   "☁️"],  #pylint: disable=C0326
-                  "Light rain"         : ["🌧️",  "🌧️"], #pylint: disable=C0326
-                  "Rain"               : ["🌧️",  "🌧️"], #pylint: disable=C0326
-                  "Heavy Rain"         : ["🌧️",  "🌧️"], #pylint: disable=C0326
-                  "Light snow"         : ["🌨️",  "🌨️"], #pylint: disable=C0326
-                  "Snow"               : ["🌨️",  "🌨️"], #pylint: disable=C0326
-                  "Heavy snow"         : ["🌨️",  "🌨️"], #pylint: disable=C0326
-                  "Foggy"              : ["🌫️",  "🌫️"], #pylint: disable=C0326
-                  "Fog"                : ["🌫️",  "🌫️"], #pylint: disable=C0326
-                  "Light snow showers" : ["🌨️",  "🌨️"]} #pylint: disable=C0326
+    def _get_sunrise_sunset_time(self):
+        astronomy = self.info.astronomy
+        return astronomy['sunrise'], astronomy['sunset']    
 
+    def _get_temperature(self):
+        '''Get current temperature'''
 
-def get_xml_root():
-    """ Returns a weather XML root, cached from old data if necessary. """
-    yr_response = 0
-    try:
-        # Request data from YR.
-        yr_response = requests.get(YR_URL)
-        if yr_response.status_code != 200:
-            raise RuntimeError('Error: YR status code ' + str(yr_response.status_code))
+        if self.unit_degree == 'F':
+            return f'{self.info.condition["temp_F"]} \uf045'
+        return f'{self.info.condition["temp_C"]} \uf03c'     
+    
+    @staticmethod
+    def _get_datetime(time_string, local_time):
+        '''Convert time string to correct datetime obj'''
 
-        # New response, store in cache file and return XML root.
-        with open(FORECAST_CACHE_FILE, "w") as file_handle:
-            file_handle.write(yr_response.text)
-        return ET.fromstring(yr_response.text)
+        datetime_obj = datetime.strptime(time_string, '%I:%M %p')
+        return datetime_obj.replace(year=local_time.year,
+                                    month=local_time.month, 
+                                    day=local_time.day)
 
-    except requests.ConnectionError:
-        # Probably just no internet. Use cached forecast.
-        if os.path.isfile(FORECAST_CACHE_FILE):
-            with open(FORECAST_CACHE_FILE) as file_handle:
-                yr_response = file_handle.read()
-            # Print recycle emoji and continue using cached forecast.
-            print("(♻️)", end=" ")
-            return ET.fromstring(yr_response)
+    def _is_day(self):
+        '''Return True if the sun hasn't set yet'''
 
-        # Dead end, no XML-root acquired.
-        raise RuntimeError('No forecast data available.')
+        local_time = self.info.condition['localObsDateTime']
+        local_time = datetime.strptime(local_time, '%Y-%m-%d %I:%M %p')
+        sunrise, sunset = [
+            self._get_datetime(time, local_time)
+            for time in self._get_sunrise_sunset_time()
+        ]
+        return sunrise <= local_time <= sunset
 
+    def _get_weather_icon(self):
+        '''
+        Get weather icon based on weather code
+        You can find codes at https://www.worldweatheronline.com/developer/api/docs/weather-icons.aspx
+        CODE_TO_ICON is a dictionary where keys is weather codes and values is Icon namedtuples with 'day' and 'night' attributes
+        '''
+
+        weather_code = self.info.condition['weatherCode']
+        if self._is_day():
+            return CODE_TO_ICON[weather_code].day
+        return CODE_TO_ICON[weather_code].night
+
+    def get_weather_status(self, short):
+        '''i3blocks uses pango to render the folowin output into the desired icons'''
+
+        temperature = self._get_temperature()
+        weather_icon = self._get_weather_icon()
+        if short:
+            return f"<span font='Weather Icons'>{weather_icon} {temperature}</span>"
+        return f"<span font='Weather Icons'>{self.city}: {weather_icon} {temperature}</span>"            
+
+def get_options():
+    ''' Get options from command line'''
+
+    parser = OptionParser()
+    parser.add_option('-f', '--farenheit', dest='farenheit',
+                      action='store_true', default=False,
+                      help='Report degrees in Farenheit')
+    parser.add_option('-c', '--city', dest='city',
+                      action='store', help='Your city', default=get_city())
+    parser.add_option('-s', '--short', dest='short',
+                      action='store_true', default=False,
+                      help='Short report (without city name)')
+
+    options = parser.parse_args()[0]
+    return options
+
+def get_city():
+    '''Get city as determined by IP address (it works better than wttr default)'''
+    r = requests.get('http://ip-api.com/json').json()
+    return r['city']
 
 def main():
-    """ Entry point for program. """
-    # Get the XML root.
-    try:
-        xml_root = get_xml_root()
-    except RuntimeError as exception:
-        print(exception)
-
-    # Parse the sun rise and set time. Appearntly, they are not always available and
-    # so we need to make sure they exist in the recieved data.
-    rise_fall_available = True
-    sun_rise_time = sun_set_time = ""
-    try:
-        sun_rise_time = xml_root.find("sun").attrib.get("rise")
-        sun_rise_time = sun_rise_time[sun_rise_time.find('T')+1 : len(sun_rise_time)-3]
-        sun_set_time = xml_root.find("sun").attrib.get("set")
-        sun_set_time = sun_set_time[sun_set_time.find('T')+1 : len(sun_set_time)-3]
-    except (ET.ParseError, AttributeError):
-        rise_fall_available = False
-
-    # Get the current weather information.
-    forecast = xml_root.find("forecast").find("tabular").find("time")
-    weather = forecast.find("symbol").attrib.get("name")
-    temperature = forecast.find("temperature").attrib.get("value")
-    wind_direction = forecast.find("windDirection").attrib.get("code")
-    wind_speed = forecast.find("windSpeed").attrib.get("mps")
-    precipitation = forecast.find("precipitation").attrib.get("value")
-
-    # Night time?
-    is_night = 0
-    now = datetime.datetime.now()
-    if rise_fall_available:
-        # Use sun rise and fall time to determine.
-        sun_rise = datetime.datetime.strptime(sun_rise_time, "%H:%M")
-        sun_set = datetime.datetime.strptime(sun_set_time, "%H:%M")
-        is_night = 1 if now.time() < sun_rise.time() or sun_set.time() < now.time() else 0
+    options = get_options()
+    if options.farenheit:
+        unit_degree = 'F'
     else:
-        # No rise/fall time available. Approximate daytime as [07:00 - 21:00].
-        sun_rise = datetime.datetime.strptime("07:00", "%H:%M")
-        sun_set = datetime.datetime.strptime("21:00", "%H:%M")
-        is_night = 1 if now.time() < sun_rise.time() or sun_set.time() < now.time() else 0
+        unit_degree = 'C'
+    weather = WttrApi(options.city, unit_degree)
+    print(weather.get_weather_status(options.short).split('>')[1].split('<')[0])
 
-    # Print the weather.
-    if weather in WEATHER_TYPES:
-        # Emoji is avaiable for usage.
-        print(weather + ": " + WEATHER_TYPES.get(weather)[is_night] + " ", end="")
-    else:
-        # No emoji available, use regular text.
-        print(weather + " ", end="")
+if __name__ == "__main__":
+    main()
 
-    # Print the temperature and sun times.
-    print(temperature, end="°C ")
-
-    # Print the sun rise and set time.
-    if rise_fall_available:
-        print("[" + sun_rise_time + " 🌅 " + sun_set_time + "]", end=" ")
-
-    # Print the precipitation (if there is any).
-    if precipitation != "0":
-        # Print with a wet umbrella
-        print("| ☔ " + precipitation + "mm", end=" ")
-
-    # Print wind data.
-    print("| 🍃 " + wind_speed + "m/s " + "(" + wind_direction + ") ", end="")
-
-# Go gadget, go!
-main()
